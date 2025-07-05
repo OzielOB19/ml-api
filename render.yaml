@@ -1,9 +1,9 @@
 services:
   - type: web
     name: ml-api
-    env: python
-    plan: free
-    buildCommand: |
-      pip install -r requirements.txt
-      playwright install --with-deps
-    startCommand: python app.py
+    runtime: python
+    buildCommand: "pip install -r requirements.txt && playwright install"
+    startCommand: "gunicorn app:app --workers=1"
+    envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "/opt/render/.cache/ms-playwright"
