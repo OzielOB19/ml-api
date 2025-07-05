@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
 import random
 import os
+import time
 
 app = Flask(__name__)
 
@@ -12,27 +13,32 @@ USER_AGENTS = [
 ]
 
 def scrape_product(search_term):
-    url = f"https://listado.mercadolibre.com.mx/{search_term.replace(' ', '-')}"
-    
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            # Configuración robusta para Render
+            browser = p.chromium.launch(
+                headless=True,
+                timeout=60000
+            )
             context = browser.new_context(
                 user_agent=random.choice(USER_AGENTS),
                 locale="es-MX",
                 viewport={'width': 1280, 'height': 720}
             )
-            page = context.new_page()
-
+            
             # Navegación principal
+            page = context.new_page()
+            url = f"https://listado.mercadolibre.com.mx/{search_term.replace(' ', '-')}"
             page.goto(url, timeout=60000)
-            page.wait_for_selector(".ui-search-layout__item", timeout=15000)
-
-            # Extracción de datos del listado
+            
+            # Espera inteligente
+            page.wait_for_selector(".ui-search-layout__item", state="attached", timeout=15000)
+            
+            # Extracción de datos
             product = page.evaluate('''() => {
                 const card = document.querySelector(".ui-search-layout__item");
                 if (!card) return null;
-
+                
                 return {
                     title: card.querySelector(".ui-search-item__title")?.innerText.trim() || "Sin título",
                     price: card.querySelector(".andes-money-amount__fraction")?.innerText.trim() || "Sin precio",
@@ -41,9 +47,9 @@ def scrape_product(search_term):
             }''')
 
             if not product or not product["link"]:
-                return {"error": "Producto no encontrado"}
+                return {"error": "Producto no encontrado", "status": "error"}
 
-            # Extracción de detalles del vendedor
+            # Detalles del vendedor
             detail_page = context.new_page()
             detail_page.goto(product["link"], timeout=60000)
             detail_page.wait_for_selector(".ui-pdp-seller__label-text-with-icon", timeout=10000)
@@ -61,10 +67,10 @@ def scrape_product(search_term):
                 "vendedor": seller,
                 "status": "success"
             }
-            
+
     except Exception as e:
         return {
-            "error": str(e),
+            "error": f"Error en scraping: {str(e)}",
             "status": "error"
         }
 
@@ -74,8 +80,7 @@ def buscar():
     if not q:
         return jsonify({"error": "Falta el parámetro ?q", "status": "error"}), 400
     
-    data = scrape_product(q)
-    return jsonify(data)
+    return jsonify(scrape_product(q))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
