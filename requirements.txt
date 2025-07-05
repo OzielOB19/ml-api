@@ -1,2 +1,3 @@
-flask
-playwright
+flask==2.3.2
+gunicorn==20.1.0  # ¡Esto es crucial!
+playwright==1.36.0
