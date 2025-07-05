@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
-import asyncio
+from playwright.sync_api import sync_playwright
 import random
-from playwright.async_api import async_playwright
+import os
 
 app = Flask(__name__)
 
@@ -11,69 +11,71 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.1 Safari/605.1.15"
 ]
 
-async def scrape_product(search_term):
+def scrape_product(search_term):
     url = f"https://listado.mercadolibre.com.mx/{search_term.replace(' ', '-')}"
     
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=random.choice(USER_AGENTS), locale="es-MX")
-        page = await context.new_page()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=random.choice(USER_AGENTS),
+                locale="es-MX",
+                viewport={'width': 1280, 'height': 720}
+            )
+            page = context.new_page()
 
-        await page.goto(url, timeout=60000, wait_until='domcontentloaded')
-        await page.wait_for_selector(".ui-search-layout__item, .poly-card, .andes-card", timeout=15000)
+            # Navegación principal
+            page.goto(url, timeout=60000)
+            page.wait_for_selector(".ui-search-layout__item", timeout=15000)
 
-        product = await page.evaluate('''() => {
-            const card = document.querySelector(".ui-search-layout__item") ||
-                         document.querySelector(".poly-card") ||
-                         document.querySelector(".andes-card");
-            if (!card) return null;
+            # Extracción de datos del listado
+            product = page.evaluate('''() => {
+                const card = document.querySelector(".ui-search-layout__item");
+                if (!card) return null;
 
-            const titleEl = card.querySelector(".ui-search-item__title") ||
-                            card.querySelector(".poly-component__title") ||
-                            card.querySelector(".andes-card__title");
+                return {
+                    title: card.querySelector(".ui-search-item__title")?.innerText.trim() || "Sin título",
+                    price: card.querySelector(".andes-money-amount__fraction")?.innerText.trim() || "Sin precio",
+                    link: card.querySelector("a.ui-search-link")?.href || ""
+                };
+            }''')
 
-            const priceEl = card.querySelector(".andes-money-amount__fraction") ||
-                            card.querySelector(".price-tag-fraction");
+            if not product or not product["link"]:
+                return {"error": "Producto no encontrado"}
 
-            const linkEl = card.querySelector("a.ui-search-link") ||
-                           card.querySelector("a.poly-component__title") ||
-                           card.querySelector("a.andes-card__link");
+            # Extracción de detalles del vendedor
+            detail_page = context.new_page()
+            detail_page.goto(product["link"], timeout=60000)
+            detail_page.wait_for_selector(".ui-pdp-seller__label-text-with-icon", timeout=10000)
+            
+            seller = detail_page.evaluate('''() => {
+                return document.querySelector(".ui-pdp-seller__label-text-with-icon")?.innerText.trim() || "Desconocido";
+            }''')
 
-            const title = titleEl?.innerText.trim() || "Sin título";
-            const price = priceEl?.innerText.trim() || "Sin precio";
-            const link = linkEl?.href || "";
+            browser.close()
 
-            return { title, price, link };
-        }''')
-
-        if not product or not product["link"]:
-            return {"error": "Producto no encontrado"}
-
-        detail = await context.new_page()
-        await detail.goto(product["link"], timeout=60000, wait_until="domcontentloaded")
-        await detail.wait_for_timeout(3000)
-
-        seller = await detail.evaluate('''() => {
-            const el = document.querySelector(".ui-pdp-seller__label-text-with-icon");
-            return el?.innerText.trim() || "Desconocido";
-        }''')
-
-        await browser.close()
-
+            return {
+                "producto": product["title"],
+                "precio": f"${product['price']} MXN",
+                "url": product["link"],
+                "vendedor": seller,
+                "status": "success"
+            }
+            
+    except Exception as e:
         return {
-            "producto": product["title"],
-            "precio": f"${product['price']} MXN",
-            "url": product["link"],
-            "vendedor": seller
+            "error": str(e),
+            "status": "error"
         }
 
 @app.route('/buscar', methods=['GET'])
 def buscar():
     q = request.args.get('q')
     if not q:
-        return jsonify({"error": "Falta el parámetro ?q"}), 400
-    data = asyncio.run(scrape_product(q))
+        return jsonify({"error": "Falta el parámetro ?q", "status": "error"}), 400
+    
+    data = scrape_product(q)
     return jsonify(data)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
