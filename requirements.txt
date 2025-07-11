@@ -1,5 +1,5 @@
 flask==2.3.2
 gunicorn==20.1.0
 playwright==1.36.0
-greenlet==2.0.2
-pyee==9.0.4
+greenlet==2.0.2  # Versión estable
+pyee==9.0.4     # Dependencia crítica para Playwright
